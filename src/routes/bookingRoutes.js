@@ -15,16 +15,42 @@ function toMinutes(time) {
   }
 
   const [hours, minutes] = time.split(":").map(Number);
-
   return hours * 60 + minutes;
 }
 
+// GET /api/bookings/my
+// Return bookings belonging to the logged-in user
+router.get("/my", requireAuth, async (req, res) => {
+  try {
+    const db = getDB();
+
+    const bookings = await db
+      .collection("bookings")
+      .find({ userId: req.user.id })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    return res.status(200).json({
+      success: true,
+      count: bookings.length,
+      data: bookings,
+    });
+  } catch (error) {
+    console.error("Get my bookings error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load your bookings.",
+    });
+  }
+});
+
 // POST /api/bookings
+// Create a booking for the logged-in user
 router.post("/", requireAuth, async (req, res) => {
   try {
     const { studioId, date, startTime, endTime } = req.body;
 
-    // Validate studio ID
     if (
       typeof studioId !== "string" ||
       !ObjectId.isValid(studioId) ||
@@ -36,7 +62,6 @@ router.post("/", requireAuth, async (req, res) => {
       });
     }
 
-    // Validate date
     if (
       typeof date !== "string" ||
       !/^\d{4}-\d{2}-\d{2}$/.test(date)
@@ -71,7 +96,6 @@ router.post("/", requireAuth, async (req, res) => {
     const start = toMinutes(startTime);
     const end = toMinutes(endTime);
 
-    // Demo studio hours: 8 AM - 8 PM
     if (
       start === null ||
       end === null ||
@@ -97,6 +121,7 @@ router.post("/", requireAuth, async (req, res) => {
     }
 
     const db = getDB();
+
     const studiosCollection = db.collection("studios");
     const bookingsCollection = db.collection("bookings");
 
@@ -111,7 +136,6 @@ router.post("/", requireAuth, async (req, res) => {
       });
     }
 
-    // Always calculate the price using MongoDB data
     const hourlyRate = studio.hourlyRate;
     const securityDeposit = studio.securityDeposit ?? 0;
 
@@ -127,7 +151,7 @@ router.post("/", requireAuth, async (req, res) => {
       });
     }
 
-    // Check overlapping reservations
+    // Check overlapping pending or confirmed bookings
     const existingBooking = await bookingsCollection.findOne({
       studioId: studio._id,
       date,
@@ -154,6 +178,7 @@ router.post("/", requireAuth, async (req, res) => {
       studioTitle: studio.title,
       studioImage: studio.image,
 
+      // Identity comes from verified session, not request body
       userId: req.user.id,
       userName: req.user.name,
       userEmail: req.user.email,
