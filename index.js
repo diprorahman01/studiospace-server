@@ -11,20 +11,33 @@ const {
   closeDB,
 } = require("./src/config/db");
 
-// Existing studio browsing routes
+// Public studio browsing routes
 const studioRoutes = require("./src/routes/studioRoutes");
 
 // Authenticated studio creation
-const createStudioRoutes = require("./src/routes/createStudioRoutes");
+const createStudioRoutes = require(
+  "./src/routes/createStudioRoutes"
+);
 
 // Owner-specific studio listings
-const ownerStudioRoutes = require("./src/routes/ownerStudioRoutes");
+const ownerStudioRoutes = require(
+  "./src/routes/ownerStudioRoutes"
+);
 
-// NEW: Secure studio editing
-const editStudioRoutes = require("./src/routes/editStudioRoutes");
+// Secure owner-only studio editing
+const editStudioRoutes = require(
+  "./src/routes/editStudioRoutes"
+);
+
+// NEW: Secure owner-only studio deletion
+const deleteStudioRoutes = require(
+  "./src/routes/deleteStudioRoutes"
+);
 
 // Booking routes
-const bookingRoutes = require("./src/routes/bookingRoutes");
+const bookingRoutes = require(
+  "./src/routes/bookingRoutes"
+);
 
 const app = express();
 
@@ -33,17 +46,17 @@ const PORT = process.env.PORT || 5000;
 const CLIENT_URL =
   process.env.CLIENT_URL || "http://localhost:3000";
 
-// -------------------------
-// MongoDB Atlas DNS workaround
-// -------------------------
+// -------------------------------------
+// Local MongoDB Atlas DNS workaround
+// -------------------------------------
 
 if (process.env.NODE_ENV !== "production") {
   dns.setServers(["8.8.8.8", "1.1.1.1"]);
 }
 
-// -------------------------
-// Middleware
-// -------------------------
+// -------------------------------------
+// Global middleware
+// -------------------------------------
 
 app.use(
   cors({
@@ -54,9 +67,9 @@ app.use(
 
 app.use(express.json({ limit: "100kb" }));
 
-// -------------------------
-// Main route
-// -------------------------
+// -------------------------------------
+// Main server route
+// -------------------------------------
 
 app.get("/", (req, res) => {
   return res.send(
@@ -64,9 +77,9 @@ app.get("/", (req, res) => {
   );
 });
 
-// -------------------------
+// -------------------------------------
 // Health check
-// -------------------------
+// -------------------------------------
 
 app.get("/api/health", async (req, res) => {
   try {
@@ -93,36 +106,61 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// -------------------------
+// -------------------------------------
 // Studio API routes
-// -------------------------
+// -------------------------------------
 
 // GET /api/studios/mine
-// Returns studios owned by the logged-in user.
-app.use("/api/studios", ownerStudioRoutes);
+// Get studios belonging to the current user.
+app.use(
+  "/api/studios",
+  ownerStudioRoutes
+);
 
 // POST /api/studios
-// Creates a new studio for the logged-in user.
-app.use("/api/studios", createStudioRoutes);
+// Add a new studio.
+app.use(
+  "/api/studios",
+  createStudioRoutes
+);
 
 // PATCH /api/studios/:id
-// Allows an owner to edit only their own studio.
-app.use("/api/studios", editStudioRoutes);
+// Edit a studio with owner verification.
+app.use(
+  "/api/studios",
+  editStudioRoutes
+);
+
+// DELETE /api/studios/:id
+// Delete a studio with owner verification
+// and active booking protection.
+app.use(
+  "/api/studios",
+  deleteStudioRoutes
+);
 
 // GET /api/studios
 // GET /api/studios/featured
 // GET /api/studios/:id
-// Public studio browsing endpoints.
-app.use("/api/studios", studioRoutes);
+// Public studio browsing routes.
+app.use(
+  "/api/studios",
+  studioRoutes
+);
 
-// -------------------------
+// -------------------------------------
 // Booking origin protection
-// -------------------------
+// -------------------------------------
 
 app.use("/api/bookings", (req, res, next) => {
-  const methods = ["POST", "PUT", "PATCH", "DELETE"];
+  const protectedMethods = [
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+  ];
 
-  if (!methods.includes(req.method)) {
+  if (!protectedMethods.includes(req.method)) {
     return next();
   }
 
@@ -136,15 +174,18 @@ app.use("/api/bookings", (req, res, next) => {
   next();
 });
 
-// -------------------------
+// -------------------------------------
 // Booking API routes
-// -------------------------
+// -------------------------------------
 
-app.use("/api/bookings", bookingRoutes);
+app.use(
+  "/api/bookings",
+  bookingRoutes
+);
 
-// -------------------------
+// -------------------------------------
 // Unknown API routes
-// -------------------------
+// -------------------------------------
 
 app.use("/api", (req, res) => {
   return res.status(404).json({
@@ -153,9 +194,9 @@ app.use("/api", (req, res) => {
   });
 });
 
-// -------------------------
+// -------------------------------------
 // Global error handler
-// -------------------------
+// -------------------------------------
 
 app.use((error, req, res, next) => {
   console.error("Server error:", error);
@@ -166,14 +207,16 @@ app.use((error, req, res, next) => {
   });
 });
 
-// -------------------------
-// Start server
-// -------------------------
+// -------------------------------------
+// Start Express server
+// -------------------------------------
 
 async function startServer() {
   try {
+    // Connect to MongoDB Atlas.
     const db = await connectDB();
 
+    // Ensure required collections exist.
     const collections = await db
       .listCollections({}, { nameOnly: true })
       .toArray();
@@ -182,26 +225,33 @@ async function startServer() {
       (collection) => collection.name
     );
 
-    for (const name of ["studios", "bookings"]) {
+    for (const name of [
+      "studios",
+      "bookings",
+    ]) {
       if (!collectionNames.includes(name)) {
         await db.createCollection(name);
       }
     }
 
-    // Booking lookup index
-    await db.collection("bookings").createIndex({
-      studioId: 1,
-      date: 1,
-      status: 1,
-      startMinutes: 1,
-      endMinutes: 1,
-    });
+    // Improve booking lookups.
+    await db
+      .collection("bookings")
+      .createIndex({
+        studioId: 1,
+        date: 1,
+        status: 1,
+        startMinutes: 1,
+        endMinutes: 1,
+      });
 
-    // Owner listings lookup index
-    await db.collection("studios").createIndex({
-      ownerId: 1,
-      createdAt: -1,
-    });
+    // Improve owner-specific studio lookups.
+    await db
+      .collection("studios")
+      .createIndex({
+        ownerId: 1,
+        createdAt: -1,
+      });
 
     const server = app.listen(PORT, () => {
       console.log(
@@ -213,14 +263,21 @@ async function startServer() {
       console.log("Studio creation API: Ready");
       console.log("Owner listings API: Ready");
       console.log("Studio editing API: Ready");
+      console.log("Studio deletion API: Ready");
       console.log("Booking API: Ready");
     });
 
-    // -------------------------
+    // -------------------------------------
     // Graceful shutdown
-    // -------------------------
+    // -------------------------------------
+
+    let shuttingDown = false;
 
     async function shutdown() {
+      if (shuttingDown) return;
+
+      shuttingDown = true;
+
       server.close(async () => {
         try {
           await closeDB();
@@ -243,7 +300,15 @@ async function startServer() {
       error.message
     );
 
-    await closeDB();
+    try {
+      await closeDB();
+    } catch (closeError) {
+      console.error(
+        "Database cleanup error:",
+        closeError
+      );
+    }
+
     process.exit(1);
   }
 }
