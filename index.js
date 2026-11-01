@@ -11,8 +11,10 @@ const {
   closeDB,
 } = require("./src/config/db");
 
-// Public studio browsing routes
-const studioRoutes = require("./src/routes/studioRoutes");
+// Public studio browsing
+const studioRoutes = require(
+  "./src/routes/studioRoutes"
+);
 
 // Authenticated studio creation
 const createStudioRoutes = require(
@@ -24,19 +26,24 @@ const ownerStudioRoutes = require(
   "./src/routes/ownerStudioRoutes"
 );
 
-// Secure owner-only studio editing
+// Secure studio editing
 const editStudioRoutes = require(
   "./src/routes/editStudioRoutes"
 );
 
-// NEW: Secure owner-only studio deletion
+// Secure studio deletion
 const deleteStudioRoutes = require(
   "./src/routes/deleteStudioRoutes"
 );
 
-// Booking routes
+// Customer booking routes
 const bookingRoutes = require(
   "./src/routes/bookingRoutes"
+);
+
+// NEW: Host booking management
+const hostBookingRoutes = require(
+  "./src/routes/hostBookingRoutes"
 );
 
 const app = express();
@@ -68,7 +75,7 @@ app.use(
 app.use(express.json({ limit: "100kb" }));
 
 // -------------------------------------
-// Main server route
+// Main route
 // -------------------------------------
 
 app.get("/", (req, res) => {
@@ -111,29 +118,24 @@ app.get("/api/health", async (req, res) => {
 // -------------------------------------
 
 // GET /api/studios/mine
-// Get studios belonging to the current user.
 app.use(
   "/api/studios",
   ownerStudioRoutes
 );
 
 // POST /api/studios
-// Add a new studio.
 app.use(
   "/api/studios",
   createStudioRoutes
 );
 
 // PATCH /api/studios/:id
-// Edit a studio with owner verification.
 app.use(
   "/api/studios",
   editStudioRoutes
 );
 
 // DELETE /api/studios/:id
-// Delete a studio with owner verification
-// and active booking protection.
 app.use(
   "/api/studios",
   deleteStudioRoutes
@@ -142,14 +144,13 @@ app.use(
 // GET /api/studios
 // GET /api/studios/featured
 // GET /api/studios/:id
-// Public studio browsing routes.
 app.use(
   "/api/studios",
   studioRoutes
 );
 
 // -------------------------------------
-// Booking origin protection
+// Customer booking origin protection
 // -------------------------------------
 
 app.use("/api/bookings", (req, res, next) => {
@@ -175,12 +176,27 @@ app.use("/api/bookings", (req, res, next) => {
 });
 
 // -------------------------------------
-// Booking API routes
+// Customer booking API
 // -------------------------------------
 
+// GET /api/bookings/my
+// POST /api/bookings
+// PATCH /api/bookings/:id/cancel
 app.use(
   "/api/bookings",
   bookingRoutes
+);
+
+// -------------------------------------
+// Host booking API
+// -------------------------------------
+
+// GET /api/host/bookings
+// Returns reservations received for
+// studios owned by the logged-in user.
+app.use(
+  "/api/host",
+  hostBookingRoutes
 );
 
 // -------------------------------------
@@ -213,7 +229,6 @@ app.use((error, req, res, next) => {
 
 async function startServer() {
   try {
-    // Connect to MongoDB Atlas.
     const db = await connectDB();
 
     // Ensure required collections exist.
@@ -234,7 +249,7 @@ async function startServer() {
       }
     }
 
-    // Improve booking lookups.
+    // Improve booking searches.
     await db
       .collection("bookings")
       .createIndex({
@@ -245,11 +260,19 @@ async function startServer() {
         endMinutes: 1,
       });
 
-    // Improve owner-specific studio lookups.
+    // Improve studio ownership searches.
     await db
       .collection("studios")
       .createIndex({
         ownerId: 1,
+        createdAt: -1,
+      });
+
+    // Improve host booking lookups.
+    await db
+      .collection("bookings")
+      .createIndex({
+        studioId: 1,
         createdAt: -1,
       });
 
@@ -264,7 +287,8 @@ async function startServer() {
       console.log("Owner listings API: Ready");
       console.log("Studio editing API: Ready");
       console.log("Studio deletion API: Ready");
-      console.log("Booking API: Ready");
+      console.log("Customer booking API: Ready");
+      console.log("Host booking API: Ready");
     });
 
     // -------------------------------------
