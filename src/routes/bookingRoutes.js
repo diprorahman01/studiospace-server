@@ -19,7 +19,7 @@ function toMinutes(time) {
 }
 
 // GET /api/bookings/my
-// Return bookings belonging to the logged-in user
+// Get bookings belonging to the signed-in user.
 router.get("/my", requireAuth, async (req, res) => {
   try {
     const db = getDB();
@@ -45,8 +45,85 @@ router.get("/my", requireAuth, async (req, res) => {
   }
 });
 
+// PATCH /api/bookings/:id/cancel
+// Cancel a pending booking belonging to the signed-in user.
+router.patch("/:id/cancel", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (
+      !ObjectId.isValid(id) ||
+      new ObjectId(id).toHexString() !== id.toLowerCase()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID.",
+      });
+    }
+
+    const db = getDB();
+    const bookingsCollection = db.collection("bookings");
+
+    // Atomic conditional update:
+    // Only the owner can cancel, and only while pending.
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: new ObjectId(id),
+        userId: req.user.id,
+        status: "pending",
+      },
+      {
+        $set: {
+          status: "cancelled",
+          cancelledAt: new Date(),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.modifiedCount === 1) {
+      return res.status(200).json({
+        success: true,
+        message: "Booking cancelled successfully!",
+      });
+    }
+
+    // Avoid revealing another user's booking information.
+    const ownedBooking = await bookingsCollection.findOne({
+      _id: new ObjectId(id),
+      userId: req.user.id,
+    });
+
+    if (!ownedBooking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    if (ownedBooking.status === "cancelled") {
+      return res.status(409).json({
+        success: false,
+        message: "This booking is already cancelled.",
+      });
+    }
+
+    return res.status(409).json({
+      success: false,
+      message: "Only pending bookings can be cancelled.",
+    });
+  } catch (error) {
+    console.error("Cancel booking error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel booking.",
+    });
+  }
+});
+
 // POST /api/bookings
-// Create a booking for the logged-in user
+// Create a new booking for the signed-in user.
 router.post("/", requireAuth, async (req, res) => {
   try {
     const { studioId, date, startTime, endTime } = req.body;
@@ -113,15 +190,7 @@ router.post("/", requireAuth, async (req, res) => {
 
     const duration = (end - start) / 60;
 
-    if (duration < 0.5) {
-      return res.status(400).json({
-        success: false,
-        message: "Minimum booking duration is 30 minutes.",
-      });
-    }
-
     const db = getDB();
-
     const studiosCollection = db.collection("studios");
     const bookingsCollection = db.collection("bookings");
 
@@ -151,7 +220,7 @@ router.post("/", requireAuth, async (req, res) => {
       });
     }
 
-    // Check overlapping pending or confirmed bookings
+    // Check overlapping pending and confirmed bookings.
     const existingBooking = await bookingsCollection.findOne({
       studioId: studio._id,
       date,
@@ -178,7 +247,6 @@ router.post("/", requireAuth, async (req, res) => {
       studioTitle: studio.title,
       studioImage: studio.image,
 
-      // Identity comes from verified session, not request body
       userId: req.user.id,
       userName: req.user.name,
       userEmail: req.user.email,

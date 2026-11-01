@@ -4,6 +4,7 @@ require("dotenv").config();
 const dns = require("node:dns");
 const express = require("express");
 const cors = require("cors");
+const createStudioRoutes = require("./src/routes/createStudioRoutes");
 
 const {
   connectDB,
@@ -57,6 +58,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 // API routes
+app.use("/api/studios", createStudioRoutes);
 app.use("/api/studios", studioRoutes);
 
 // Allow booking mutations only from the configured frontend origin
