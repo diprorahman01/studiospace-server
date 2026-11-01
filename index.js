@@ -12,11 +12,12 @@ const {
 } = require("./src/config/db");
 
 const studioRoutes = require("./src/routes/studioRoutes");
+const bookingRoutes = require("./src/routes/bookingRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Local development DNS workaround
+// Local DNS workaround
 if (process.env.NODE_ENV !== "production") {
   dns.setServers(["8.8.8.8", "1.1.1.1"]);
 }
@@ -29,18 +30,17 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 // Main route
 app.get("/", (req, res) => {
   res.send("StudioSpace API Server is Running!");
 });
 
-// Database health check
+// Health check
 app.get("/api/health", async (req, res) => {
   try {
     const db = getDB();
-
     await db.command({ ping: 1 });
 
     res.status(200).json({
@@ -56,8 +56,26 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// Studio API routes
+// API routes
 app.use("/api/studios", studioRoutes);
+
+// Allow booking mutations only from the configured frontend origin
+app.use("/api/bookings", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+    return next();
+  }
+
+  if (req.headers.origin !== process.env.CLIENT_URL) {
+    return res.status(403).json({
+      success: false,
+      message: "Invalid request origin.",
+    });
+  }
+
+  next();
+});
+
+app.use("/api/bookings", bookingRoutes);
 
 // Unknown API routes
 app.use("/api", (req, res) => {
@@ -77,7 +95,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Start server
 async function startServer() {
   try {
     const db = await connectDB();
@@ -86,20 +103,25 @@ async function startServer() {
       .listCollections({}, { nameOnly: true })
       .toArray();
 
-    const existingNames = collections.map(
-      (collection) => collection.name
-    );
+    const names = collections.map((collection) => collection.name);
 
     for (const name of ["studios", "bookings"]) {
-      if (!existingNames.includes(name)) {
+      if (!names.includes(name)) {
         await db.createCollection(name);
-        console.log(`${name} collection created`);
       }
     }
 
+    await db.collection("bookings").createIndex({
+      studioId: 1,
+      date: 1,
+      status: 1,
+      startMinutes: 1,
+      endMinutes: 1,
+    });
+
     const server = app.listen(PORT, () => {
       console.log(`Server running at http://localhost:${PORT}`);
-      console.log("Studio APIs are ready!");
+      console.log("Studio and Booking APIs are ready!");
     });
 
     async function shutdown() {
