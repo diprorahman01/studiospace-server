@@ -11,14 +11,17 @@ const {
   closeDB,
 } = require("./src/config/db");
 
-// Existing studio routes
+// Existing studio browsing routes
 const studioRoutes = require("./src/routes/studioRoutes");
 
 // Authenticated studio creation
 const createStudioRoutes = require("./src/routes/createStudioRoutes");
 
-// NEW: Owner-specific studio listings
+// Owner-specific studio listings
 const ownerStudioRoutes = require("./src/routes/ownerStudioRoutes");
+
+// NEW: Secure studio editing
+const editStudioRoutes = require("./src/routes/editStudioRoutes");
 
 // Booking routes
 const bookingRoutes = require("./src/routes/bookingRoutes");
@@ -30,7 +33,10 @@ const PORT = process.env.PORT || 5000;
 const CLIENT_URL =
   process.env.CLIENT_URL || "http://localhost:3000";
 
-// Local MongoDB Atlas DNS workaround
+// -------------------------
+// MongoDB Atlas DNS workaround
+// -------------------------
+
 if (process.env.NODE_ENV !== "production") {
   dns.setServers(["8.8.8.8", "1.1.1.1"]);
 }
@@ -53,7 +59,9 @@ app.use(express.json({ limit: "100kb" }));
 // -------------------------
 
 app.get("/", (req, res) => {
-  res.send("StudioSpace API Server is Running!");
+  return res.send(
+    "StudioSpace API Server is Running!"
+  );
 });
 
 // -------------------------
@@ -73,7 +81,10 @@ app.get("/api/health", async (req, res) => {
       database: db.databaseName,
     });
   } catch (error) {
-    console.error("Health check error:", error.message);
+    console.error(
+      "Health check error:",
+      error.message
+    );
 
     return res.status(503).json({
       success: false,
@@ -87,16 +98,21 @@ app.get("/api/health", async (req, res) => {
 // -------------------------
 
 // GET /api/studios/mine
-// Returns only studios owned by the logged-in user.
+// Returns studios owned by the logged-in user.
 app.use("/api/studios", ownerStudioRoutes);
 
 // POST /api/studios
-// Creates a studio for the logged-in user.
+// Creates a new studio for the logged-in user.
 app.use("/api/studios", createStudioRoutes);
+
+// PATCH /api/studios/:id
+// Allows an owner to edit only their own studio.
+app.use("/api/studios", editStudioRoutes);
 
 // GET /api/studios
 // GET /api/studios/featured
 // GET /api/studios/:id
+// Public studio browsing endpoints.
 app.use("/api/studios", studioRoutes);
 
 // -------------------------
@@ -172,6 +188,7 @@ async function startServer() {
       }
     }
 
+    // Booking lookup index
     await db.collection("bookings").createIndex({
       studioId: 1,
       date: 1,
@@ -180,6 +197,7 @@ async function startServer() {
       endMinutes: 1,
     });
 
+    // Owner listings lookup index
     await db.collection("studios").createIndex({
       ownerId: 1,
       createdAt: -1,
@@ -194,12 +212,25 @@ async function startServer() {
       console.log("Studio browsing API: Ready");
       console.log("Studio creation API: Ready");
       console.log("Owner listings API: Ready");
+      console.log("Studio editing API: Ready");
       console.log("Booking API: Ready");
     });
 
+    // -------------------------
+    // Graceful shutdown
+    // -------------------------
+
     async function shutdown() {
       server.close(async () => {
-        await closeDB();
+        try {
+          await closeDB();
+        } catch (error) {
+          console.error(
+            "Database shutdown error:",
+            error
+          );
+        }
+
         process.exit(0);
       });
     }
