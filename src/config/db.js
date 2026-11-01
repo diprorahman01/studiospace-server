@@ -1,5 +1,12 @@
 
+const dns = require("node:dns");
 const { MongoClient, ServerApiVersion } = require("mongodb");
+
+// Configure DNS for MongoDB Atlas SRV lookup
+// Development workaround for local DNS issues
+if (process.env.NODE_ENV !== "production") {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+}
 
 let client;
 let database;
@@ -26,6 +33,7 @@ async function connectDB() {
 
   try {
     await client.connect();
+
     await client.db("admin").command({ ping: 1 });
 
     database = client.db(dbName);
@@ -36,6 +44,7 @@ async function connectDB() {
   } catch (error) {
     await client.close();
     client = undefined;
+    database = undefined;
     throw error;
   }
 }
