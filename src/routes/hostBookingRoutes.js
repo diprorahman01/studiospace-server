@@ -7,33 +7,82 @@ const requireAuth = require("../middleware/requireAuth");
 
 const router = express.Router();
 
+const CLIENT_URL =
+  process.env.CLIENT_URL || "http://localhost:3000";
+
+// -------------------------------------
+// Shared helpers
+// -------------------------------------
+
+function isValidObjectId(id) {
+  return (
+    typeof id === "string" &&
+    /^[a-fA-F0-9]{24}$/.test(id)
+  );
+}
+
+function checkOrigin(req, res, next) {
+  if (req.headers.origin !== CLIENT_URL) {
+    return res.status(403).json({
+      success: false,
+      message: "Invalid request origin.",
+    });
+  }
+
+  next();
+}
+
+async function getOwnedStudios(db, ownerId) {
+  return db
+    .collection("studios")
+    .find(
+      { ownerId },
+      {
+        projection: {
+          _id: 1,
+          title: 1,
+          image: 1,
+        },
+      }
+    )
+    .toArray();
+}
+
+function getStudioIds(studios) {
+  return studios.flatMap((studio) => [
+    studio._id.toString(),
+    studio._id,
+  ]);
+}
+
+function getSummary(bookings) {
+  return {
+    total: bookings.length,
+    pending: bookings.filter(
+      (booking) => booking.status === "pending"
+    ).length,
+    confirmed: bookings.filter(
+      (booking) => booking.status === "confirmed"
+    ).length,
+    cancelled: bookings.filter(
+      (booking) => booking.status === "cancelled"
+    ).length,
+  };
+}
+
+// -------------------------------------
 // GET /api/host/bookings
-// Retrieve bookings received by studios owned by
-// the authenticated user.
+// List bookings for the owner's studios
+// -------------------------------------
 
 router.get("/bookings", requireAuth, async (req, res) => {
   try {
     const db = getDB();
 
-    const studiosCollection = db.collection("studios");
-    const bookingsCollection = db.collection("bookings");
-
-    const ownerId = req.user.id;
-
-    // Step 1: Find studios owned by this user.
-    // Never accept ownerId from request parameters.
-    const ownerStudios = await studiosCollection
-      .find(
-        { ownerId },
-        {
-          projection: {
-            _id: 1,
-            title: 1,
-            image: 1,
-          },
-        }
-      )
-      .toArray();
+    const ownerStudios = await getOwnedStudios(
+      db,
+      req.user.id
+    );
 
     if (ownerStudios.length === 0) {
       return res.status(200).json({
@@ -49,52 +98,16 @@ router.get("/bookings", requireAuth, async (req, res) => {
       });
     }
 
-    // Your existing bookings store studioId
-    // as a string. Support ObjectId values too.
-    const studioIds = ownerStudios.flatMap(
-      (studio) => [
-        studio._id.toString(),
-        new ObjectId(studio._id),
-      ]
-    );
-
-    // Step 2: Retrieve only bookings associated
-    // with the owner's studios.
-    const bookings = await bookingsCollection
-      .find(
-        {
-          studioId: {
-            $in: studioIds,
-          },
+    const bookings = await db
+      .collection("bookings")
+      .find({
+        studioId: {
+          $in: getStudioIds(ownerStudios),
         },
-        {
-          projection: {
-            studioId: 1,
-            studioTitle: 1,
-            studioImage: 1,
-            userId: 1,
-            userName: 1,
-            userEmail: 1,
-            date: 1,
-            startTime: 1,
-            endTime: 1,
-            duration: 1,
-            hourlyRate: 1,
-            rentalCost: 1,
-            securityDeposit: 1,
-            totalAmount: 1,
-            status: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            cancelledAt: 1,
-          },
-        }
-      )
+      })
       .sort({ createdAt: -1 })
       .toArray();
 
-    // Step 3: Attach current studio information
-    // for convenient frontend rendering.
     const studioMap = new Map(
       ownerStudios.map((studio) => [
         studio._id.toString(),
@@ -120,23 +133,10 @@ router.get("/bookings", requireAuth, async (req, res) => {
       };
     });
 
-    const summary = {
-      total: data.length,
-      pending: data.filter(
-        (booking) => booking.status === "pending"
-      ).length,
-      confirmed: data.filter(
-        (booking) => booking.status === "confirmed"
-      ).length,
-      cancelled: data.filter(
-        (booking) => booking.status === "cancelled"
-      ).length,
-    };
-
     return res.status(200).json({
       success: true,
       message: "Host bookings loaded successfully.",
-      summary,
+      summary: getSummary(data),
       data,
     });
   } catch (error) {
@@ -148,5 +148,159 @@ router.get("/bookings", requireAuth, async (req, res) => {
     });
   }
 });
+
+// -------------------------------------
+// PATCH /api/host/bookings/:id/approve
+// PATCH /api/host/bookings/:id/reject
+// -------------------------------------
+
+async function updateBookingStatus(req, res, action) {
+  try {
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID.",
+      });
+    }
+
+    const db = getDB();
+    const bookingsCollection = db.collection("bookings");
+
+    const bookingId = new ObjectId(id);
+
+    const booking = await bookingsCollection.findOne({
+      _id: bookingId,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    // Look up the studio that this booking belongs to.
+    // The studio must exist and belong to this host.
+    const studioId = String(booking.studioId);
+
+    if (!isValidObjectId(studioId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking studio not found.",
+      });
+    }
+
+    const studio = await db
+      .collection("studios")
+      .findOne({
+        _id: new ObjectId(studioId),
+        ownerId: req.user.id,
+      });
+
+    if (!studio) {
+      // Do not reveal another owner's booking details.
+      return res.status(404).json({
+        success: false,
+        message:
+          "Booking not found or you do not have permission.",
+      });
+    }
+
+    if (booking.status !== "pending") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Only pending bookings can be approved or rejected.",
+      });
+    }
+
+    const now = new Date();
+
+    const newStatus =
+      action === "approve" ? "confirmed" : "cancelled";
+
+    const updates = {
+      status: newStatus,
+      updatedAt: now,
+    };
+
+    if (action === "approve") {
+      updates.confirmedAt = now;
+    } else {
+      updates.cancelledAt = now;
+      updates.rejectedAt = now;
+      updates.cancelledBy = "host";
+    }
+
+    // The status filter makes the transition atomic.
+    // If another request processed the booking first,
+    // matchedCount becomes zero.
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: bookingId,
+        studioId: booking.studioId,
+        status: "pending",
+      },
+      {
+        $set: updates,
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This booking has already been processed.",
+      });
+    }
+
+    const updatedBooking =
+      await bookingsCollection.findOne({
+        _id: bookingId,
+      });
+
+    return res.status(200).json({
+      success: true,
+      message:
+        action === "approve"
+          ? "Booking approved successfully."
+          : "Booking rejected successfully.",
+      data: updatedBooking,
+    });
+  } catch (error) {
+    console.error(
+      `Host booking ${action} error:`,
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Unable to update the booking. Please try again.",
+    });
+  }
+}
+
+// Approve a pending reservation
+router.patch(
+  "/bookings/:id/approve",
+  requireAuth,
+  checkOrigin,
+  async (req, res) => {
+    return updateBookingStatus(req, res, "approve");
+  }
+);
+
+// Reject a pending reservation
+router.patch(
+  "/bookings/:id/reject",
+  requireAuth,
+  checkOrigin,
+  async (req, res) => {
+    return updateBookingStatus(req, res, "reject");
+  }
+);
 
 module.exports = router;
