@@ -23,7 +23,8 @@ function validImage(value) {
 
   const image = value.trim();
 
-  // Uploaded or local public image path
+  if (!image || image.length > 2048) return false;
+
   if (
     image.startsWith("/") &&
     !image.startsWith("//") &&
@@ -33,7 +34,6 @@ function validImage(value) {
     return true;
   }
 
-  // External image URL
   try {
     const url = new URL(image);
 
@@ -46,9 +46,67 @@ function validImage(value) {
   }
 }
 
+function validateCoordinates(value) {
+  // Coordinates are optional for existing workflows.
+  if (value === undefined || value === null) {
+    return { coordinates: null };
+  }
+
+  if (
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return {
+      error: "Provide valid map coordinates.",
+    };
+  }
+
+  const keys = Object.keys(value);
+
+  if (
+    keys.length !== 2 ||
+    !keys.includes("latitude") ||
+    !keys.includes("longitude")
+  ) {
+    return {
+      error:
+        "Provide both latitude and longitude.",
+    };
+  }
+
+  const { latitude, longitude } = value;
+
+  if (
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    return {
+      error: "Latitude must be between -90 and 90.",
+    };
+  }
+
+  if (
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return {
+      error:
+        "Longitude must be between -180 and 180.",
+    };
+  }
+
+  return {
+    coordinates: { latitude, longitude },
+  };
+}
+
+// POST /api/studios
 router.post("/", requireAuth, async (req, res) => {
   try {
-    // Basic origin check for cookie-authenticated requests
     const allowedOrigin =
       process.env.CLIENT_URL || "http://localhost:3000";
 
@@ -81,6 +139,38 @@ router.post("/", requireAuth, async (req, res) => {
     const hourlyRate = body.hourlyRate;
     const securityDeposit = body.securityDeposit;
     const maxCapacity = body.maxCapacity;
+
+    // Optional exact address
+    if (
+      body.fullAddress !== undefined &&
+      typeof body.fullAddress !== "string"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Full address must be text.",
+      });
+    }
+
+    const fullAddress = cleanText(body.fullAddress);
+
+    if (fullAddress.length > 300) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Full address must be 300 characters or fewer.",
+      });
+    }
+
+    // Optional map coordinates
+    const coordinateValidation =
+      validateCoordinates(body.coordinates);
+
+    if (coordinateValidation.error) {
+      return res.status(400).json({
+        success: false,
+        message: coordinateValidation.error,
+      });
+    }
 
     // Studio name
     if (title.length < 5 || title.length > 120) {
@@ -154,7 +244,7 @@ router.post("/", requireAuth, async (req, res) => {
     }
 
     // Main image
-    if (!validImage(image) || image.length > 2048) {
+    if (!validImage(image)) {
       return res.status(400).json({
         success: false,
         message: "Provide a valid studio image URL.",
@@ -169,11 +259,7 @@ router.post("/", requireAuth, async (req, res) => {
       !Array.isArray(images) ||
       images.length < 1 ||
       images.length > 10 ||
-      !images.every(
-        (item) =>
-          validImage(item) &&
-          item.trim().length <= 2048
-      )
+      !images.every(validImage)
     ) {
       return res.status(400).json({
         success: false,
@@ -202,13 +288,14 @@ router.post("/", requireAuth, async (req, res) => {
     }
 
     const db = getDB();
-
     const now = new Date();
 
     const studio = {
       title,
       category,
       location,
+      fullAddress,
+      coordinates: coordinateValidation.coordinates,
       overview,
 
       hourlyRate,
@@ -216,19 +303,20 @@ router.post("/", requireAuth, async (req, res) => {
       maxCapacity,
 
       image,
-      images: [...new Set(images.map((item) => item.trim()))],
+      images: [
+        ...new Set(images.map((item) => item.trim())),
+      ],
       amenities: [
         ...new Set(amenities.map((item) => item.trim())),
       ],
 
-      // Ownership is always obtained from verified session
+      // Ownership comes from verified session.
       ownerId: req.user.id,
       ownerName: req.user.name,
       ownerEmail: req.user.email,
 
       rating: 0,
       reviewCount: 0,
-
       status: "active",
 
       createdAt: now,

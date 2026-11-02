@@ -20,6 +20,8 @@ const ALLOWED_FIELDS = [
   "title",
   "category",
   "location",
+  "fullAddress",
+  "coordinates",
   "overview",
   "hourlyRate",
   "securityDeposit",
@@ -57,6 +59,65 @@ function validImage(value) {
   }
 }
 
+function validateCoordinates(value) {
+  // Explicit null clears the saved coordinates.
+  if (value === null) {
+    return { coordinates: null };
+  }
+
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return {
+      error: "Provide valid map coordinates.",
+    };
+  }
+
+  const keys = Object.keys(value);
+
+  if (
+    keys.length !== 2 ||
+    !keys.includes("latitude") ||
+    !keys.includes("longitude")
+  ) {
+    return {
+      error:
+        "Provide both latitude and longitude.",
+    };
+  }
+
+  const { latitude, longitude } = value;
+
+  if (
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    return {
+      error: "Latitude must be between -90 and 90.",
+    };
+  }
+
+  if (
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return {
+      error:
+        "Longitude must be between -180 and 180.",
+    };
+  }
+
+  return {
+    coordinates: { latitude, longitude },
+  };
+}
+
 function validateUpdate(body) {
   if (
     !body ||
@@ -69,10 +130,12 @@ function validateUpdate(body) {
   const keys = Object.keys(body);
 
   if (keys.length === 0) {
-    return { error: "Provide at least one field to update." };
+    return {
+      error: "Provide at least one field to update.",
+    };
   }
 
-  // Prevent updates to ownerId, rating, status, etc.
+  // Reject ownership, status, rating, and unknown fields.
   const unknownField = keys.find(
     (key) => !ALLOWED_FIELDS.includes(key)
   );
@@ -89,17 +152,28 @@ function validateUpdate(body) {
     const value = body[key];
 
     if (
-      ["title", "category", "location", "overview", "image"].includes(
-        key
-      )
+      [
+        "title",
+        "category",
+        "location",
+        "fullAddress",
+        "overview",
+        "image",
+      ].includes(key)
     ) {
       if (typeof value !== "string") {
         return { error: `${key} must be text.` };
       }
 
       updates[key] = value.trim();
-    } else if (key === "images" || key === "amenities") {
-      updates[key] = value;
+    } else if (key === "coordinates") {
+      const result = validateCoordinates(value);
+
+      if (result.error) {
+        return { error: result.error };
+      }
+
+      updates.coordinates = result.coordinates;
     } else {
       updates[key] = value;
     }
@@ -107,16 +181,21 @@ function validateUpdate(body) {
 
   if (
     "title" in updates &&
-    (updates.title.length < 5 || updates.title.length > 120)
+    (updates.title.length < 5 ||
+      updates.title.length > 120)
   ) {
-    return { error: "Studio name must be 5–120 characters." };
+    return {
+      error: "Studio name must be 5–120 characters.",
+    };
   }
 
   if (
     "category" in updates &&
     !ALLOWED_CATEGORIES.includes(updates.category)
   ) {
-    return { error: "Please select a valid category." };
+    return {
+      error: "Please select a valid category.",
+    };
   }
 
   if (
@@ -124,7 +203,19 @@ function validateUpdate(body) {
     (updates.location.length < 3 ||
       updates.location.length > 150)
   ) {
-    return { error: "Location must be 3–150 characters." };
+    return {
+      error: "Location must be 3–150 characters.",
+    };
+  }
+
+  if (
+    "fullAddress" in updates &&
+    updates.fullAddress.length > 300
+  ) {
+    return {
+      error:
+        "Full address must be 300 characters or fewer.",
+    };
   }
 
   if (
@@ -144,7 +235,9 @@ function validateUpdate(body) {
       updates.hourlyRate <= 0 ||
       updates.hourlyRate > 100000)
   ) {
-    return { error: "Enter a valid hourly rate." };
+    return {
+      error: "Enter a valid hourly rate.",
+    };
   }
 
   if (
@@ -154,7 +247,9 @@ function validateUpdate(body) {
       updates.securityDeposit < 0 ||
       updates.securityDeposit > 1000000)
   ) {
-    return { error: "Enter a valid security deposit." };
+    return {
+      error: "Enter a valid security deposit.",
+    };
   }
 
   if (
@@ -163,11 +258,18 @@ function validateUpdate(body) {
       updates.maxCapacity < 1 ||
       updates.maxCapacity > 500)
   ) {
-    return { error: "Maximum capacity must be 1–500." };
+    return {
+      error: "Maximum capacity must be 1–500.",
+    };
   }
 
-  if ("image" in updates && !validImage(updates.image)) {
-    return { error: "Provide a valid main image URL." };
+  if (
+    "image" in updates &&
+    !validImage(updates.image)
+  ) {
+    return {
+      error: "Provide a valid main image URL.",
+    };
   }
 
   if ("images" in updates) {
@@ -177,11 +279,15 @@ function validateUpdate(body) {
       updates.images.length > 10 ||
       !updates.images.every(validImage)
     ) {
-      return { error: "Provide 1–10 valid image URLs." };
+      return {
+        error: "Provide 1–10 valid image URLs.",
+      };
     }
 
     updates.images = [
-      ...new Set(updates.images.map((item) => item.trim())),
+      ...new Set(
+        updates.images.map((item) => item.trim())
+      ),
     ];
   }
 
@@ -196,15 +302,19 @@ function validateUpdate(body) {
           item.trim().length <= 80
       )
     ) {
-      return { error: "Please provide valid amenities." };
+      return {
+        error: "Please provide valid amenities.",
+      };
     }
 
     updates.amenities = [
-      ...new Set(updates.amenities.map((item) => item.trim())),
+      ...new Set(
+        updates.amenities.map((item) => item.trim())
+      ),
     ];
   }
 
-  // Always update this value on the server.
+  // Server-managed timestamp.
   updates.updatedAt = new Date();
 
   return { updates };
@@ -214,7 +324,8 @@ function validateUpdate(body) {
 router.patch("/:id", requireAuth, async (req, res) => {
   try {
     const allowedOrigin =
-      process.env.CLIENT_URL || "http://localhost:3000";
+      process.env.CLIENT_URL ||
+      "http://localhost:3000";
 
     if (req.headers.origin !== allowedOrigin) {
       return res.status(403).json({
@@ -249,10 +360,13 @@ router.patch("/:id", requireAuth, async (req, res) => {
       ownerId: req.user.id,
     };
 
-    // Atomic ownership check: only the actual owner can update.
-    const result = await collection.updateOne(filter, {
-      $set: validation.updates,
-    });
+    // Only the verified owner can edit this studio.
+    const result = await collection.updateOne(
+      filter,
+      {
+        $set: validation.updates,
+      }
+    );
 
     if (result.matchedCount === 0) {
       return res.status(404).json({
