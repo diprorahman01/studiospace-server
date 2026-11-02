@@ -11,6 +11,10 @@ const {
   closeDB,
 } = require("./src/config/db");
 
+// ============================================
+// IMPORT STUDIO ROUTES
+// ============================================
+
 // Public studio browsing
 const studioRoutes = require(
   "./src/routes/studioRoutes"
@@ -36,34 +40,51 @@ const deleteStudioRoutes = require(
   "./src/routes/deleteStudioRoutes"
 );
 
+// ============================================
+// IMPORT BOOKING ROUTES
+// ============================================
+
 // Customer booking routes
 const bookingRoutes = require(
   "./src/routes/bookingRoutes"
 );
 
-// NEW: Host booking management
+// Host booking management
 const hostBookingRoutes = require(
   "./src/routes/hostBookingRoutes"
 );
+
+// ============================================
+// EMAIL NOTIFICATION MIDDLEWARE
+// ============================================
+
+const bookingEmailMiddleware = require(
+  "./src/middleware/bookingEmailMiddleware"
+);
+
+// ============================================
+// EXPRESS CONFIGURATION
+// ============================================
 
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 
 const CLIENT_URL =
-  process.env.CLIENT_URL || "http://localhost:3000";
+  process.env.CLIENT_URL ||
+  "http://localhost:3000";
 
-// -------------------------------------
-// Local MongoDB Atlas DNS workaround
-// -------------------------------------
+// ============================================
+// LOCAL MONGODB ATLAS DNS WORKAROUND
+// ============================================
 
 if (process.env.NODE_ENV !== "production") {
   dns.setServers(["8.8.8.8", "1.1.1.1"]);
 }
 
-// -------------------------------------
-// Global middleware
-// -------------------------------------
+// ============================================
+// GLOBAL MIDDLEWARE
+// ============================================
 
 app.use(
   cors({
@@ -74,9 +95,9 @@ app.use(
 
 app.use(express.json({ limit: "100kb" }));
 
-// -------------------------------------
-// Main route
-// -------------------------------------
+// ============================================
+// MAIN ROUTE
+// ============================================
 
 app.get("/", (req, res) => {
   return res.send(
@@ -84,9 +105,9 @@ app.get("/", (req, res) => {
   );
 });
 
-// -------------------------------------
-// Health check
-// -------------------------------------
+// ============================================
+// HEALTH CHECK
+// ============================================
 
 app.get("/api/health", async (req, res) => {
   try {
@@ -113,9 +134,9 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// -------------------------------------
-// Studio API routes
-// -------------------------------------
+// ============================================
+// STUDIO API ROUTES
+// ============================================
 
 // GET /api/studios/mine
 app.use(
@@ -149,9 +170,9 @@ app.use(
   studioRoutes
 );
 
-// -------------------------------------
-// Customer booking origin protection
-// -------------------------------------
+// ============================================
+// CUSTOMER BOOKING ORIGIN PROTECTION
+// ============================================
 
 app.use("/api/bookings", (req, res, next) => {
   const protectedMethods = [
@@ -175,33 +196,56 @@ app.use("/api/bookings", (req, res, next) => {
   next();
 });
 
-// -------------------------------------
-// Customer booking API
-// -------------------------------------
+// ============================================
+// EMAIL NOTIFICATION MIDDLEWARE
+// ============================================
 
+// Watch successful customer booking actions.
+// This middleware does not change the booking
+// response or booking data.
+app.use(
+  "/api/bookings",
+  bookingEmailMiddleware
+);
+
+// Watch successful host booking actions,
+// including approval and rejection.
+app.use(
+  "/api/host",
+  bookingEmailMiddleware
+);
+
+// ============================================
+// CUSTOMER BOOKING API
+// ============================================
+
+// GET /api/bookings/availability/:studioId
 // GET /api/bookings/my
 // POST /api/bookings
 // PATCH /api/bookings/:id/cancel
+// PATCH /api/bookings/:id/reschedule
+
 app.use(
   "/api/bookings",
   bookingRoutes
 );
 
-// -------------------------------------
-// Host booking API
-// -------------------------------------
+// ============================================
+// HOST BOOKING API
+// ============================================
 
 // GET /api/host/bookings
-// Returns reservations received for
-// studios owned by the logged-in user.
+// PATCH /api/host/bookings/:id/approve
+// PATCH /api/host/bookings/:id/reject
+
 app.use(
   "/api/host",
   hostBookingRoutes
 );
 
-// -------------------------------------
-// Unknown API routes
-// -------------------------------------
+// ============================================
+// UNKNOWN API ROUTES
+// ============================================
 
 app.use("/api", (req, res) => {
   return res.status(404).json({
@@ -210,9 +254,9 @@ app.use("/api", (req, res) => {
   });
 });
 
-// -------------------------------------
-// Global error handler
-// -------------------------------------
+// ============================================
+// GLOBAL ERROR HANDLER
+// ============================================
 
 app.use((error, req, res, next) => {
   console.error("Server error:", error);
@@ -223,15 +267,18 @@ app.use((error, req, res, next) => {
   });
 });
 
-// -------------------------------------
-// Start Express server
-// -------------------------------------
+// ============================================
+// START EXPRESS SERVER
+// ============================================
 
 async function startServer() {
   try {
     const db = await connectDB();
 
-    // Ensure required collections exist.
+    // ========================================
+    // ENSURE REQUIRED COLLECTIONS EXIST
+    // ========================================
+
     const collections = await db
       .listCollections({}, { nameOnly: true })
       .toArray();
@@ -249,7 +296,11 @@ async function startServer() {
       }
     }
 
-    // Improve booking searches.
+    // ========================================
+    // DATABASE INDEXES
+    // ========================================
+
+    // Improve booking conflict searches.
     await db
       .collection("bookings")
       .createIndex({
@@ -276,6 +327,10 @@ async function startServer() {
         createdAt: -1,
       });
 
+    // ========================================
+    // START LISTENING
+    // ========================================
+
     const server = app.listen(PORT, () => {
       console.log(
         `Server running at http://localhost:${PORT}`
@@ -289,11 +344,32 @@ async function startServer() {
       console.log("Studio deletion API: Ready");
       console.log("Customer booking API: Ready");
       console.log("Host booking API: Ready");
+
+      // ======================================
+      // EMAIL SERVICE STATUS
+      // ======================================
+
+      if (
+        process.env.RESEND_API_KEY &&
+        process.env.EMAIL_FROM
+      ) {
+        console.log(
+          "Booking email notifications: Configured"
+        );
+      } else {
+        console.log(
+          "Booking email notifications: Disabled"
+        );
+
+        console.log(
+          "Configure RESEND_API_KEY and EMAIL_FROM to enable emails."
+        );
+      }
     });
 
-    // -------------------------------------
-    // Graceful shutdown
-    // -------------------------------------
+    // ========================================
+    // GRACEFUL SHUTDOWN
+    // ========================================
 
     let shuttingDown = false;
 
