@@ -26,6 +26,7 @@ function toMinutes(time) {
   }
 
   const [hours, minutes] = time.split(":").map(Number);
+
   return hours * 60 + minutes;
 }
 
@@ -73,10 +74,28 @@ function isStudioBookable(studio) {
   return true;
 }
 
+// Each occupied half-hour is represented by its
+// starting minute: 600, 630, 660, etc.
+function createOccupiedSlots(start, end) {
+  const slots = [];
+
+  for (
+    let minute = start;
+    minute < end;
+    minute += SLOT_MINUTES
+  ) {
+    slots.push(minute);
+  }
+
+  return slots;
+}
+
+function duplicateSlotError(error) {
+  return error && error.code === 11000;
+}
+
 // ==========================================
 // GET /api/bookings/availability/:studioId
-// Query parameter: ?date=YYYY-MM-DD
-// Public availability, no personal details.
 // ==========================================
 
 router.get(
@@ -142,7 +161,6 @@ router.get(
       }
 
       const slots = [];
-
       const currentDay = todayUTC();
       const now = new Date();
 
@@ -165,8 +183,6 @@ router.get(
             booking.endMinutes > start
         );
 
-        // Dates and stored booking times currently use
-        // the existing server's UTC-based date policy.
         const past =
           date < currentDay ||
           (date === currentDay &&
@@ -217,30 +233,34 @@ router.get(
 // GET /api/bookings/my
 // ==========================================
 
-router.get("/my", requireAuth, async (req, res) => {
-  try {
-    const db = getDB();
+router.get(
+  "/my",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const db = getDB();
 
-    const bookings = await db
-      .collection("bookings")
-      .find({ userId: req.user.id })
-      .sort({ createdAt: -1 })
-      .toArray();
+      const bookings = await db
+        .collection("bookings")
+        .find({ userId: req.user.id })
+        .sort({ createdAt: -1 })
+        .toArray();
 
-    return res.status(200).json({
-      success: true,
-      count: bookings.length,
-      data: bookings,
-    });
-  } catch (error) {
-    console.error("Get my bookings error:", error);
+      return res.status(200).json({
+        success: true,
+        count: bookings.length,
+        data: bookings,
+      });
+    } catch (error) {
+      console.error("Get my bookings error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Failed to load your bookings.",
-    });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to load your bookings.",
+      });
+    }
   }
-});
+);
 
 // ==========================================
 // PATCH /api/bookings/:id/cancel
@@ -264,21 +284,24 @@ router.patch(
       const bookingsCollection =
         db.collection("bookings");
 
-      const result =
-        await bookingsCollection.updateOne(
-          {
-            _id: new ObjectId(id),
-            userId: req.user.id,
-            status: "pending",
+      // The partial unique index only includes
+      // pending and confirmed bookings.
+      // Changing status to cancelled automatically
+      // releases the associated slot keys.
+      const result = await bookingsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          userId: req.user.id,
+          status: "pending",
+        },
+        {
+          $set: {
+            status: "cancelled",
+            cancelledAt: new Date(),
+            updatedAt: new Date(),
           },
-          {
-            $set: {
-              status: "cancelled",
-              cancelledAt: new Date(),
-              updatedAt: new Date(),
-            },
-          }
-        );
+        }
+      );
 
       if (result.modifiedCount === 1) {
         return res.status(200).json({
@@ -325,6 +348,7 @@ router.patch(
 
 // ==========================================
 // POST /api/bookings
+// Database-level double-booking protection
 // ==========================================
 
 router.post(
@@ -349,7 +373,8 @@ router.post(
       if (!validDate(date)) {
         return res.status(400).json({
           success: false,
-          message: "Please provide a valid booking date.",
+          message:
+            "Please provide a valid booking date.",
         });
       }
 
@@ -380,8 +405,6 @@ router.post(
         });
       }
 
-      // Match the availability API's treatment
-      // of elapsed times on the current UTC date.
       const now = new Date();
 
       const currentUTCMinutes =
@@ -402,15 +425,16 @@ router.post(
       const duration = (end - start) / 60;
 
       const db = getDB();
+
       const studiosCollection =
         db.collection("studios");
+
       const bookingsCollection =
         db.collection("bookings");
 
-      const studio =
-        await studiosCollection.findOne({
-          _id: new ObjectId(studioId),
-        });
+      const studio = await studiosCollection.findOne({
+        _id: new ObjectId(studioId),
+      });
 
       if (!studio) {
         return res.status(404).json({
@@ -444,6 +468,9 @@ router.post(
         });
       }
 
+      // Keep the existing overlap check for a
+      // clear conflict response and compatibility
+      // with old records.
       const existingBooking =
         await bookingsCollection.findOne({
           studioId: studio._id,
@@ -473,6 +500,15 @@ router.post(
           (rentalCost + securityDeposit) * 100
         ) / 100;
 
+      // NEW: Reserve all selected 30-minute
+      // slots with a single booking document.
+      //
+      // The unique multikey index prevents
+      // another active booking for this studio
+      // and date from sharing any slot.
+      const occupiedSlots =
+        createOccupiedSlots(start, end);
+
       const booking = {
         studioId: studio._id,
         studioTitle: studio.title,
@@ -487,6 +523,7 @@ router.post(
         endTime,
         startMinutes: start,
         endMinutes: end,
+        occupiedSlots,
         duration,
 
         hourlyRate,
@@ -499,8 +536,26 @@ router.post(
         updatedAt: new Date(),
       };
 
-      const result =
-        await bookingsCollection.insertOne(booking);
+      // MongoDB enforces the unique slot keys
+      // during insert. This prevents the race
+      // between simultaneous booking requests.
+      let result;
+
+      try {
+        result = await bookingsCollection.insertOne(
+          booking
+        );
+      } catch (error) {
+        if (duplicateSlotError(error)) {
+          return res.status(409).json({
+            success: false,
+            message:
+              "Some selected time slots were just reserved. Please refresh availability and choose another time.",
+          });
+        }
+
+        throw error;
+      }
 
       return res.status(201).json({
         success: true,
