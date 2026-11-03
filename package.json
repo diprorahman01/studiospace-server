@@ -1,15 +1,24 @@
+
 {
-  "name": "server",
+  "name": "studiospace-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "StudioSpace Express and MongoDB backend",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon index.js",
+    "start": "node index.js",
+    "test": "node --test tests/*.test.js",
+    "security:check": "node scripts/verifySecurity.js",
+    "booking:index": "node scripts/enableAtomicBookingSlots.js"
+  },
+  "keywords": [
+    "studiospace",
+    "studio-booking",
+    "express",
+    "mongodb"
+  ],
+  "license": "ISC",
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
