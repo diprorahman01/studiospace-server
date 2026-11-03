@@ -12,7 +12,13 @@ router.get("/", async (req, res) => {
 
     const studios = await db
       .collection("studios")
-      .find({})
+      .find({
+  $or: [
+    { status: "active" },
+    { status: { $exists: false } },
+    { status: null },
+  ],
+})
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -38,7 +44,13 @@ router.get("/featured", async (req, res) => {
 
     const studios = await db
       .collection("studios")
-      .find({})
+      .find({
+  $or: [
+    { status: "active" },
+    { status: { $exists: false } },
+    { status: null },
+  ],
+})
       .sort({ rating: -1, createdAt: -1 })
       .limit(6)
       .toArray();
