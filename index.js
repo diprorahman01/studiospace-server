@@ -18,6 +18,7 @@ const completeBookingRoutes = require("./src/routes/completeBookingRoutes");
 const invoiceRoutes = require("./src/routes/invoiceRoutes");
 const favoritesRoutes = require("./src/routes/favoritesRoutes");
 const reviewRoutes = require("./src/routes/reviewRoutes");
+const requireAuth = require("./src/middleware/requireAuth");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -58,9 +59,34 @@ app.use("/api/studios", editStudioRoutes);
 app.use("/api/studios", deleteStudioRoutes);
 app.use("/api/studios", studioRoutes);
 
+
+/*
+  Challenge 1: JWT Authentication
+
+  Check authentication before validating the origin.
+  Unauthenticated booking requests must receive 401.
+*/
+
+// Protect POST /api/bookings first
 app.use("/api/bookings", (req, res, next) => {
+  if (req.method === "POST" && req.path === "/") {
+    return requireAuth(req, res, next);
+  }
+
+  next();
+});
+
+// Keep origin protection for booking mutations
+app.use("/api/bookings", (req, res, next) => {
+  const mutationMethods = [
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+  ];
+
   if (
-    ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) &&
+    mutationMethods.includes(req.method) &&
     req.headers.origin !== CLIENT_URL
   ) {
     return res.status(403).json({
@@ -68,8 +94,10 @@ app.use("/api/bookings", (req, res, next) => {
       message: "Invalid request origin.",
     });
   }
+
   next();
 });
+
 
 app.use("/api/bookings", bookingEmailMiddleware);
 app.use("/api/host", bookingEmailMiddleware);
